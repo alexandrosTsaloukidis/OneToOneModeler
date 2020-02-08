@@ -1,9 +1,35 @@
 class OneToOneModeler(object):
 
-   def __init__(self, pathTrain, pathValidation, pathOutput,  numberOfSamples, classList, varList, initialSeed, badVar, outputFile, replace = True):
+   # One to one modeler:
+   # Assume that out of the sample of length n there are k failures and m successes, however m << k
+   # In order to identify the optimal model, which predicts the probability of success,
+   # and overcome te problematic situation when the susccess is very rare,
+   # susmpling method is chosen in order to create subsamples of the total population where m = k
+   # and on this sample create and validate the model
+   
+   ##################### Constructor paramaters:
+   # pathTotal -> the path where the sample is located
+   # sep -> how the columns are sperated (e.g. comma, tab)
+   # pathOutput - > the path where the models created from subsampling simulations is stored
+   # numberOfSamples -> number of simulations to be performed
+   # classList -> each element of this list is the reference category of a variable used, in case 
+   # if the variable should be treated as numeric the element should be "numeric"
+   # varList -> the names of the variables used for the model building
+   # initialSeed -> the seed for the simulations
+   # badVar -> the target variable (0: failure, 1: success)
+   # outputFile -> the output file name
+   # replace -> whether an observation during the sampling can be chosen again or not
+   # trainProp -> how the validation and training samples will be split, if the values is out of 0,1 range then 
+   # the split will be random based on the current seed
+   
+   ############### executeOneToOne parameters
+   # selection -> whether a feature selection algorithm will be used
+   # selectionCriteria -> the criteria on which the feature selection algorithm will be based ('bic' or 'aic')
+   # direction -> the direction of the feature elimination ('Forward', 'Backward', 'Both', 'allCombinationsLogistic' )
+   
+   def __init__(self, pathTotal, sep, pathOutput,  numberOfSamples, classList, varList, initialSeed, badVar, outputFile, replace = True, trainProp = 0):
        
-       self.pathTrain = pathTrain
-       self.pathValidation = pathValidation       
+       self.pathTotal = pathTotal         
        self.pathOutput = pathOutput
        self.numberOfSamples = numberOfSamples
        self.classList = classList
@@ -12,6 +38,8 @@ class OneToOneModeler(object):
        self.badVar = badVar
        self.outputFile = outputFile
        self.replace = replace
+       self.sep = sep
+       self.trainProp = trainProp
     
    
    def Forward(self, odject_inputForward, data_inputForward, metricForward = "aic"):
@@ -137,6 +165,24 @@ class OneToOneModeler(object):
         bad = bad[bad == 0]       
         return sum(bad == predictedPositive)/ len(bad)
     
+  
+    
+   def sampleSplitter(self, sample, trainProp, currentSeed):
+       import numpy as np
+       sample.loc[:,"aa"] = range(sample.shape[0])
+       if (trainProp > 0 and trainProp < 1):
+           np.random.seed(int(currentSeed))
+           trainingAA = np.random.choice(range(sample.shape[0]), int(trainProp*sample.shape[0]), replace = False).tolist()
+           trainingSample = sample.iloc[trainingAA,:]
+           validationSample = sample.loc[~sample["aa"].isin(trainingAA)]
+       else:
+           np.random.seed(int(currentSeed))
+           trainingAA = np.unique(np.random.choice(range(sample.shape[0]), sample.shape[0])).tolist()
+           trainingSample = sample.iloc[trainingAA,:]
+           validationSample = sample.loc[~sample["aa"].isin(trainingAA)]
+           
+       return trainingSample, validationSample
+   
     
    def getDiagnostics(self, sample, badVariable, predictedProbability):
        from sklearn import metrics
@@ -146,6 +192,7 @@ class OneToOneModeler(object):
        AR  = 2*AUC - 1
        KS =  np.max(np.abs(fpr - tpr))
        return AUC, AR, KS
+   
    
     
    def executeOneToOne (self, selection = False, selectionCriteria = "aic", direction = "Forward"):
@@ -158,18 +205,23 @@ class OneToOneModeler(object):
         initialModelFormulaDep = ["C("+self.badVar+",Treatment(0))"]
         initialModelFormulaIndep = [""]
         for i in range(len(self.varList)):
-            if (i == 0): initialModelFormulaIndep = ["C("+self.varList[i]+",Treatment("+str(self.classList[i])+"))"]
-            else:  initialModelFormulaIndep = initialModelFormulaIndep + ["C("+self.varList[i]+",Treatment("+str(self.classList[i])+"))"]
+            if (i == 0): 
+                if (self.classList[i] == "numeric"): initialModelFormulaIndep = [self.varList[i]]
+                else: initialModelFormulaIndep = ["C("+self.varList[i]+",Treatment("+str(self.classList[i])+"))"]
+            else:  
+                if (self.classList[i] == "numeric"): initialModelFormulaIndep = initialModelFormulaIndep + [self.varList[i]]
+                else: initialModelFormulaIndep = initialModelFormulaIndep + ["C("+self.varList[i]+",Treatment("+str(self.classList[i])+"))"]
         
         initialModelFormulaIndepFinal = "+".join(initialModelFormulaIndep)
         finalInitialFormula = initialModelFormulaDep[0] + "~" + initialModelFormulaIndepFinal
-        dataTrain = pd.read_table(self.pathTrain, header = 0)
-        dataValidation = pd.read_table(self.pathValidation, header = 0)
+        dataTotal = pd.read_csv(self.pathTotal, sep = self.sep, header = 0)
         np.random.seed(self.initialSeed)
         sampleSeeds = np.random.uniform(1,100000,self.numberOfSamples)
         i = 0
         for randomSeed in sampleSeeds:
-        
+           
+           dataTrain, dataValidation = self.sampleSplitter(dataTotal, self.trainProp, randomSeed)
+           
            workingSample = self.OneToOneSampleCreator(dataTrain, self.badVar, randomSeed, self.replace)
            workingSampleValidation = self.OneToOneSampleCreator(dataValidation, self.badVar, randomSeed, self.replace)
 
@@ -209,9 +261,5 @@ class OneToOneModeler(object):
         outputResult.to_excel(self.pathOutput+"\\"+self.outputFile+dt_string+".xlsx", index = None, header = True, sheet_name='One to One models')
         return outputResult
         
-    
- 
   
-    
-
 
